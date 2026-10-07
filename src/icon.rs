@@ -1,8 +1,8 @@
 //! The app icon, drawn procedurally: a small sunburst on a dark rounded square.
 //!
-//! The window icon is rendered at startup; `assets/icon.png` and `assets/icon.ico`
-//! (used by the macOS bundle and the Windows executable) are produced from the same
-//! code by `cargo test write_icon_assets -- --ignored`.
+//! The window icon is rendered at startup; `assets/icon.png`, `assets/icon-256.png` and
+//! `assets/icon.ico` (used by the macOS bundle, the Debian package and the Windows
+//! executable) are produced from the same code by `cargo test write_icon_assets -- --ignored`.
 
 use std::f32::consts::TAU;
 
@@ -125,6 +125,7 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("icon.png"), png(1024)).unwrap();
+        std::fs::write(dir.join("icon-256.png"), png(256)).unwrap();
 
         // ICO with embedded PNG images (supported since Windows Vista).
         let sizes = [16u32, 24, 32, 48, 64, 128, 256];

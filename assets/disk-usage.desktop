@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Disk Usage
+Comment=See what takes up space on your disks
+Exec=disk-usage %f
+Icon=disk-usage
+Terminal=false
+Categories=Utility;System;Filesystem;
+Keywords=disk;space;usage;storage;sunburst;
+StartupWMClass=disk-usage

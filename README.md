@@ -49,16 +49,21 @@ sudo apt-get install libxkbcommon-dev libgl1-mesa-dev libegl1-mesa-dev libwaylan
   libx11-dev libxcursor-dev libxrandr-dev libxi-dev
 ```
 
+On Debian/Ubuntu, `build_scripts/linux-deb.sh` packs the release binary into
+`dist/disk-usage_<version>_amd64.deb` (with a menu entry and icon); install it with
+`sudo apt install ./dist/disk-usage_*.deb`.
+
 GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)) builds and
-tests every push for these platforms:
+tests every `v*` tag (or a manual run) for these platforms:
 
 | Platform | Artifact |
 |---|---|
-| Linux x86_64 | `disk-usage-linux-x86_64.tar.gz` |
+| Linux x86_64 | `disk-usage-linux-x86_64.tar.gz`, `disk-usage_<version>_amd64.deb` (Debian/Ubuntu) |
 | Windows x86_64 | `disk-usage-windows-x86_64.zip` (the `.exe` has the app icon embedded) |
 | macOS (universal: Apple Silicon + Intel) | `disk-usage-macos-universal.zip` with `Disk Usage.app` |
 
-Pushing a `v*` tag publishes these as a GitHub release.
+Pushing a `v*` tag publishes these as a GitHub release; the tag must be `v` + the version in
+`Cargo.toml`.
 
 The macOS app is ad-hoc signed but not notarized. The first time, open it with
 right-click → Open.
@@ -69,7 +74,7 @@ right-click → Open.
 cargo test                                   # unit tests
 cargo clippy --all-targets -- -D warnings
 SCAN_BENCH=~/Documents cargo test --release bench_scan -- --ignored --nocapture
-cargo test write_icon_assets -- --ignored    # regenerate assets/icon.{png,ico}
+cargo test write_icon_assets -- --ignored    # regenerate assets/icon{,-256}.png, icon.ico
 DISK_USAGE_SHOT=shot.png cargo run -- ~/src  # debug builds: save a screenshot and exit
 ```
 
