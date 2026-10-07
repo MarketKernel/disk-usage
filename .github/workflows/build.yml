@@ -1,0 +1,123 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04 # older glibc = runs on more distros
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macos-universal
+            os: macos-latest
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}${{ matrix.extra_target && format(',{0}', matrix.extra_target) || '' }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Test
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build release (second macOS architecture)
+        if: matrix.extra_target
+        run: cargo build --release --locked --target ${{ matrix.extra_target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="disk-usage-${{ matrix.name }}"
+          mkdir -p dist
+          case "${{ runner.os }}" in
+            Windows)
+              bin="target/${{ matrix.target }}/release/disk-usage.exe"
+              cp "$bin" dist/
+              (cd dist && 7z a "../$name.zip" disk-usage.exe >/dev/null)
+              ;;
+            macOS)
+              lipo -create -output dist/disk-usage \
+                "target/${{ matrix.target }}/release/disk-usage" \
+                "target/${{ matrix.extra_target }}/release/disk-usage"
+              bin=dist/disk-usage
+              build_scripts/macos-bundle.sh dist/disk-usage dist
+              (cd dist && ditto -c -k --keepParent "Disk Usage.app" "../$name.zip")
+              ;;
+            Linux)
+              bin="target/${{ matrix.target }}/release/disk-usage"
+              cp "$bin" dist/
+              tar -czf "$name.tar.gz" -C dist disk-usage
+              ;;
+          esac
+          echo "### $name" >> "$GITHUB_STEP_SUMMARY"
+          ls -l "$bin" | awk '{printf "Binary size: %.2f MiB (%d bytes)\n", $5/1048576, $5}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disk-usage-${{ matrix.name }}
+          path: |
+            disk-usage-${{ matrix.name }}.zip
+            disk-usage-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

@@ -1,0 +1,37 @@
+[package]
+name = "disk-usage"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Lightweight cross-platform disk usage visualizer with a sunburst chart"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+rayon = "1.11"
+# Only used by the debug-build screenshot helper (src/shot.rs); eframe already pulls it in.
+image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+trash = "5.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+# Load libwayland at runtime and draw window decorations on GNOME/Wayland,
+# like eframe's default features do.
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland-dlopen", "wayland-csd-adwaita"] }
+
+# Embeds the icon and version info into the .exe (only when building on Windows).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
