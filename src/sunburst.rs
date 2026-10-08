@@ -367,7 +367,12 @@ pub fn show(
         painter.add(Shape::closed_line(outline(&geo, r0, r1, s.a0, s.a1), Stroke::new(2.0, colors::ACCENT)));
     }
 
-    paint_center(&painter, &geo, tree, layout.root, hovered == Some(Hit::Center));
+    let center_hint = match (hovered, highlight.selected) {
+        (Some(Hit::Center), Some(_)) => Some("× deselect"),
+        (Some(Hit::Center), None) if layout.root != Tree::ROOT => Some("⬆ up"),
+        _ => None,
+    };
+    paint_center(&painter, &geo, tree, layout.root, center_hint);
     paint_legend(&painter, response.rect);
 
     ChartOutput { response, hovered }
@@ -506,8 +511,9 @@ fn format_small_share(share: f32) -> String {
     format!("{p:.digits$}%")
 }
 
-fn paint_center(painter: &Painter, geo: &Geometry, tree: &Tree, root: NodeId, hovered: bool) {
-    let fill = if hovered && root != Tree::ROOT { colors::PANEL } else { colors::BG };
+/// `hint` names what a click on the center does; the center is highlighted when it has one.
+fn paint_center(painter: &Painter, geo: &Geometry, tree: &Tree, root: NodeId, hint: Option<&str>) {
+    let fill = if hint.is_some() { colors::PANEL } else { colors::BG };
     painter.circle_filled(geo.center, geo.hole - 1.0, fill);
 
     let size = format::bytes(tree.node(root).size);
@@ -527,11 +533,11 @@ fn paint_center(painter: &Painter, geo: &Geometry, tree: &Tree, root: NodeId, ho
         FontId::proportional(big * 0.8),
         colors::TEXT,
     );
-    if hovered && root != Tree::ROOT {
+    if let Some(hint) = hint {
         painter.text(
             geo.center + Vec2::new(0.0, big * 1.55),
             Align2::CENTER_CENTER,
-            "⬆ up",
+            hint,
             FontId::proportional((big * 0.4).max(11.0)),
             colors::TEXT_WEAK,
         );

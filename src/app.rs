@@ -433,7 +433,7 @@ fn status_bar(ui: &mut Ui, app: &App) {
                     }
                     ui.label(weak(parts.join("  ·  ")));
                     ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
-                        ui.label(weak("click: select · double-click: zoom · right-click: actions".into()));
+                        ui.label(weak("click: select · center: deselect / up · double-click: zoom · right-click: actions".into()));
                     });
                 }
             });
@@ -548,6 +548,8 @@ fn chart_panel(
             }
         } else if response.clicked() {
             actions.push(match out.hovered {
+                // Like Escape: first clear the selection, then go up.
+                Some(Hit::Center) if view.selected.is_some() => Action::Select(None),
                 Some(Hit::Center) => Action::Up,
                 Some(Hit::Sector(item)) => Action::Select(Some(item.node())),
                 None => Action::Select(None),
