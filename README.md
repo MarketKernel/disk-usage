@@ -16,7 +16,10 @@ as a single ~5 MB executable with no runtime dependencies.
   first. Drag the panel's edge to resize it.
 - **Double-click** a sector (or press <kbd>Enter</kbd>) to zoom into it. Click the center,
   press <kbd>Backspace</kbd> or use the breadcrumbs to go back up.
-- **Right-click** for actions: show in Finder/Explorer, open, copy path, move to Trash.
+- **Right-click** for actions: show in Finder/Explorer, open, copy path, add to the Trash queue.
+- Items for the Trash are queued first (<kbd>Del</kbd> or <kbd>⌘⌫</kbd> queues the selected
+  one), grayed out on the chart and listed in a panel on the right. **Move to Trash** there
+  moves them all at once, **Clear all** empties the list, and **×** takes one item off.
 - To scan a folder, drop it on the window, use **Open…** (<kbd>Ctrl/⌘+O</kbd>) or pass its
   path as an argument: `disk-usage ~/Downloads`.
 

@@ -6,12 +6,13 @@ use std::time::Duration;
 
 use eframe::egui::{
     self, Align, Align2, Button, Color32, CornerRadius, FontId, Frame, Id, Key, Layout as UiLayout, Margin,
-    Modal, RichText, Sense, Ui, Vec2, vec2,
+    Modal, RichText, Sense, Shape, Ui, UiBuilder, vec2,
 };
 
 use crate::colors;
 use crate::format;
 use crate::platform;
+use crate::queue::TrashQueue;
 use crate::scan::{Outcome, Scan};
 use crate::sunburst::{self, Highlight, Hit, Item, Layout, Transition};
 use crate::tree::{NodeId, Tree};
@@ -40,8 +41,8 @@ pub struct App {
     scan_seen: (u64, f64),
     /// Last clicked list row and when, to recognize a double-click on it.
     last_row_click: Option<(NodeId, f64)>,
-    /// Node waiting for confirmation before moving to the trash.
-    confirm_trash: Option<NodeId>,
+    /// Items to move to the Trash together, once the user confirms the whole list.
+    queue: TrashQueue,
     about: bool,
     message: Option<String>,
     quick: Vec<PathBuf>,
@@ -60,8 +61,12 @@ enum Action {
     Reveal(NodeId),
     Open(NodeId),
     CopyPath(NodeId),
-    AskTrash(NodeId),
-    Trash(NodeId),
+    /// Selects a node, moving the view to its folder if it isn't on the chart.
+    Locate(NodeId),
+    Queue(NodeId),
+    Unqueue(NodeId),
+    ClearQueue,
+    TrashQueued,
     About,
 }
 
@@ -84,7 +89,7 @@ impl App {
             menu_target: None,
             scan_seen: (0, 0.0),
             last_row_click: None,
-            confirm_trash: None,
+            queue: TrashQueue::default(),
             about: false,
             message: None,
             quick,
@@ -134,7 +139,7 @@ impl App {
                 self.list_hover = None;
                 self.menu_target = None;
                 self.last_row_click = None;
-                self.confirm_trash = None;
+                self.queue.clear();
             }
             Outcome::Cancelled => self.message = Some("Scan cancelled".into()),
             Outcome::Failed(error) => self.message = Some(error),
@@ -185,8 +190,21 @@ impl App {
             Action::CopyPath(node) => {
                 self.with_path(node, |p| ctx.copy_text(p.to_string_lossy().into_owned()))
             }
-            Action::AskTrash(node) => self.confirm_trash = Some(node),
-            Action::Trash(node) => self.trash(node),
+            Action::Locate(node) => {
+                let Some(tree) = &self.tree else { return };
+                if self.layout.as_ref().is_none_or(|l| l.sector_of(node).is_none()) {
+                    self.view = tree.parent(node).unwrap_or(Tree::ROOT);
+                }
+                self.selected = Some(node).filter(|&n| n != self.view);
+            }
+            Action::Queue(node) => {
+                if let Some(tree) = &self.tree {
+                    self.queue.add(tree, node);
+                }
+            }
+            Action::Unqueue(node) => self.queue.remove(node),
+            Action::ClearQueue => self.queue.clear(),
+            Action::TrashQueued => self.trash_queued(),
             Action::About => self.about = true,
         }
     }
@@ -197,25 +215,46 @@ impl App {
         }
     }
 
-    fn trash(&mut self, node: NodeId) {
+    /// Moves everything queued to the Trash; what fails stays in the queue.
+    fn trash_queued(&mut self) {
         let Some(tree) = &mut self.tree else { return };
-        let path = tree.path(node);
-        match platform::move_to_trash(&path) {
-            Ok(()) => {
-                let size = tree.node(node).size;
-                tree.remove(node);
-                if tree.is_within(self.view, node) {
-                    self.view = tree.parent(node).unwrap_or(Tree::ROOT);
+        let (mut moved, mut freed, mut failed) = (Vec::new(), 0, Vec::new());
+        for node in self.queue.items().to_vec() {
+            let path = tree.path(node);
+            match platform::move_to_trash(&path) {
+                Ok(()) => {
+                    freed += tree.node(node).size;
+                    tree.remove(node);
+                    self.queue.remove(node);
+                    // Queued items don't overlap, so the parent of one is never inside another.
+                    if tree.is_within(self.view, node) {
+                        self.view = tree.parent(node).unwrap_or(Tree::ROOT);
+                    }
+                    if self.selected.is_some_and(|s| tree.is_within(s, node)) {
+                        self.selected = None;
+                    }
+                    moved.push(path);
                 }
-                if self.selected.is_some_and(|s| tree.is_within(s, node)) {
-                    self.selected = None;
-                }
-                self.layout = None;
-                self.disk = platform::disk_space(tree.root_path());
-                self.message = Some(format!("Moved to Trash: {} ({})", path.display(), format::bytes(size)));
+                Err(e) => failed.push(format!("Could not move {} to Trash: {e}", path.display())),
             }
-            Err(e) => self.message = Some(format!("Could not move {} to Trash: {e}", path.display())),
         }
+        if !moved.is_empty() {
+            self.layout = None;
+            self.disk = platform::disk_space(tree.root_path());
+        }
+        let mut parts = Vec::new();
+        match moved.as_slice() {
+            [] => {}
+            [path] => parts.push(format!("Moved to Trash: {} ({})", path.display(), format::bytes(freed))),
+            _ => parts.push(format!("Moved {} items to Trash ({})", moved.len(), format::bytes(freed))),
+        }
+        if let Some(first) = failed.first() {
+            parts.push(match failed.len() {
+                1 => first.clone(),
+                n => format!("{first} (and {} more, still queued)", n - 1),
+            });
+        }
+        self.message = Some(parts.join("  ·  "));
     }
 
     fn handle_input(&self, ctx: &egui::Context, actions: &mut Vec<Action>) {
@@ -223,7 +262,7 @@ impl App {
         if let Some(path) = dropped {
             actions.push(Action::Scan(path));
         }
-        if ctx.egui_wants_keyboard_input() || self.confirm_trash.is_some() || self.about {
+        if ctx.egui_wants_keyboard_input() || self.about {
             return;
         }
         ctx.input_mut(|i| {
@@ -240,6 +279,17 @@ impl App {
             }
             if i.consume_key(egui::Modifiers::NONE, Key::Escape) {
                 actions.push(if self.selected.is_some() { Action::Select(None) } else { Action::Up });
+            }
+            // Delete, or ⌘⌫ like in Finder; checked before the plain Backspace.
+            if let Some(sel) = self.selected
+                && (i.consume_key(egui::Modifiers::NONE, Key::Delete)
+                    || i.consume_key(egui::Modifiers::COMMAND, Key::Backspace))
+            {
+                actions.push(if self.queue.contains(sel) {
+                    Action::Unqueue(sel)
+                } else {
+                    Action::Queue(sel)
+                });
             }
             if i.consume_key(egui::Modifiers::NONE, Key::Backspace) {
                 actions.push(Action::Up);
@@ -294,8 +344,11 @@ impl eframe::App for App {
                 selected: self.selected,
                 chart_hover: self.chart_hover,
                 list_hover: self.list_hover,
+                queue: &self.queue,
             };
-            self.list_hover = details_panel(ui, &view, &mut self.last_row_click, &mut actions);
+            let details_hover = details_panel(ui, &view, &mut self.last_row_click, &mut actions);
+            let queue_hover = if self.queue.is_empty() { None } else { queue_panel(ui, &view, &mut actions) };
+            self.list_hover = details_hover.or(queue_hover);
             let (hover, menu_target) = chart_panel(ui, &view, self.menu_target, &mut actions);
             self.chart_hover = hover;
             self.menu_target = menu_target;
@@ -303,16 +356,6 @@ impl eframe::App for App {
             start_screen(ui, &self.quick, self.message.as_deref(), &mut actions);
         }
 
-        if let (Some(node), Some(tree)) = (self.confirm_trash, &self.tree) {
-            match confirm_trash_modal(&ctx, tree, node) {
-                Some(true) => {
-                    actions.push(Action::Trash(node));
-                    self.confirm_trash = None;
-                }
-                Some(false) => self.confirm_trash = None,
-                None => {}
-            }
-        }
         if self.about && about_modal(&ctx) {
             self.about = false;
         }
@@ -328,6 +371,11 @@ impl eframe::App for App {
             }
             if let Some(n) = nth(shot.select) {
                 actions.push(Action::Select(Some(n)));
+            }
+            for &q in &shot.queue {
+                if let Some(n) = nth(Some(q)) {
+                    actions.push(Action::Queue(n));
+                }
             }
         }
 
@@ -346,6 +394,7 @@ struct View<'a> {
     selected: Option<NodeId>,
     chart_hover: Option<Item>,
     list_hover: Option<NodeId>,
+    queue: &'a TrashQueue,
 }
 
 fn setup_style(ctx: &egui::Context) {
@@ -540,7 +589,11 @@ fn chart_panel(
     let mut menu_target = menu_target;
     let mut hovered_item = None;
     egui::CentralPanel::no_frame().show(ui, |ui| {
-        let highlight = Highlight { selected: view.selected, hovered: view.list_hover.map(Item::Node) };
+        let highlight = Highlight {
+            selected: view.selected,
+            hovered: view.list_hover.map(Item::Node),
+            queue: view.queue,
+        };
         let out = sunburst::show(ui, tree, view.layout, view.transition, &highlight);
         let response = out.response;
 
@@ -576,7 +629,7 @@ fn chart_panel(
             _ => response,
         };
         if let Some(target) = menu_target {
-            response.context_menu(|ui| context_menu(ui, tree, target, actions));
+            response.context_menu(|ui| context_menu(ui, view, target, actions));
         }
     });
     (hovered_item, menu_target)
@@ -650,7 +703,7 @@ fn details_panel(
                             actions.push(Action::Select(Some(id)));
                             *last_click = Some((id, now));
                         }
-                        resp.context_menu(|ui| context_menu(ui, tree, id, actions));
+                        resp.context_menu(|ui| context_menu(ui, view, id, actions));
                     }
                 },
             );
@@ -666,7 +719,10 @@ fn details_header(ui: &mut Ui, view: &View, target: NodeId, actions: &mut Vec<Ac
     // The full path is right below the name.
     let name = tree.short_name(target);
     ui.horizontal(|ui| {
-        let color = view.layout.sector_of(target).map_or(colors::SMALL, |s| s.color);
+        let mut color = view.layout.sector_of(target).map_or(colors::SMALL, |s| s.color);
+        if view.queue.covers(tree, target) {
+            color = colors::queued(color);
+        }
         let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(3), color);
         ui.add(egui::Label::new(RichText::new(name).size(18.0).strong()).wrap());
@@ -699,10 +755,28 @@ fn details_header(ui: &mut Ui, view: &View, target: NodeId, actions: &mut Vec<Ac
         if ui.button("Reveal").on_hover_text(format!("Show in {}", platform::FILE_MANAGER)).clicked() {
             actions.push(Action::Reveal(target));
         }
-        if target != Tree::ROOT && ui.button("🗑 Trash").on_hover_text("Move to Trash…").clicked() {
-            actions.push(Action::AskTrash(target));
+        if target != Tree::ROOT {
+            trash_button(ui, view, target, actions);
         }
     });
+}
+
+/// Adds `node` to the Trash queue, or takes it off.
+fn trash_button(ui: &mut Ui, view: &View, node: NodeId, actions: &mut Vec<Action>) {
+    if view.queue.contains(node) {
+        if ui.button("Remove from queue").on_hover_text("Keep it: take it off the Trash queue").clicked() {
+            actions.push(Action::Unqueue(node));
+        }
+        return;
+    }
+    let covered = view.queue.covers(view.tree, node);
+    let resp = ui
+        .add_enabled(!covered, Button::new("🗑 Trash"))
+        .on_hover_text("Add to the Trash queue (Del)")
+        .on_disabled_hover_text("Its folder is already in the Trash queue");
+    if resp.clicked() {
+        actions.push(Action::Queue(node));
+    }
 }
 
 fn list_row(ui: &mut Ui, view: &View, id: NodeId, max: u64, total: u64, active: bool) -> egui::Response {
@@ -710,7 +784,9 @@ fn list_row(ui: &mut Ui, view: &View, id: NodeId, max: u64, total: u64, active: 
     let node = tree.node(id);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     let painter = ui.painter_at(rect);
+    let queued = view.queue.covers(tree, id);
     let color = view.layout.sector_of(id).map_or(colors::SMALL, |s| s.color);
+    let color = if queued { colors::queued(color) } else { color };
 
     if resp.hovered() || active {
         painter.rect_filled(rect, CornerRadius::same(4), colors::PANEL);
@@ -746,7 +822,11 @@ fn list_row(ui: &mut Ui, view: &View, id: NodeId, max: u64, total: u64, active: 
 
     let icon = if node.is_dir() { "🗀" } else { "🗋" };
     let name_rect = egui::Rect::from_min_max(rect.min, egui::pos2(right - 128.0, rect.max.y));
-    let text_color = if active { Color32::WHITE } else { colors::TEXT };
+    let text_color = match (active, queued) {
+        (true, _) => Color32::WHITE,
+        (false, true) => colors::TEXT_WEAK,
+        (false, false) => colors::TEXT,
+    };
     painter.with_clip_rect(name_rect).text(
         egui::pos2(rect.left() + 12.0, y),
         Align2::LEFT_CENTER,
@@ -757,7 +837,103 @@ fn list_row(ui: &mut Ui, view: &View, id: NodeId, max: u64, total: u64, active: 
     resp
 }
 
-fn context_menu(ui: &mut Ui, tree: &Tree, node: NodeId, actions: &mut Vec<Action>) {
+/// The items queued for the Trash; returns the hovered one.
+fn queue_panel(ui: &mut Ui, view: &View, actions: &mut Vec<Action>) -> Option<NodeId> {
+    let tree = view.tree;
+    let items = view.queue.items();
+    let mut hovered = None;
+
+    let max_width = (ui.available_width() * 0.5).max(260.0);
+    egui::Panel::right("queue")
+        .resizable(true)
+        .default_size(320.0)
+        .size_range(240.0..=max_width)
+        .frame(Frame::NONE.fill(colors::BG).inner_margin(Margin { left: 10, right: 12, top: 12, bottom: 4 }))
+        .show(ui, |ui| {
+            ui.label(RichText::new("Trash queue").size(18.0).strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format::bytes(view.queue.size(tree))).size(22.0).strong());
+                let count = match items.len() {
+                    1 => "1 item".to_owned(),
+                    n => format!("{} items", format::count(n as u64)),
+                };
+                ui.label(RichText::new(count).size(14.0).color(colors::TEXT_WEAK));
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let trash =
+                    Button::new(RichText::new("🗑 Move to Trash").color(Color32::WHITE)).fill(colors::DANGER);
+                if ui.add(trash).on_hover_text("Move everything listed here to the Trash").clicked() {
+                    actions.push(Action::TrashQueued);
+                }
+                if ui.button("Clear all").on_hover_text("Empty the list; nothing is moved").clicked() {
+                    actions.push(Action::ClearQueue);
+                }
+            });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(2.0);
+
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for &id in items {
+                    let resp = queue_row(ui, view, id, actions);
+                    if resp.contains_pointer() {
+                        hovered = Some(id);
+                    }
+                    if resp.clicked() {
+                        actions.push(Action::Locate(id));
+                    }
+                    resp.context_menu(|ui| context_menu(ui, view, id, actions));
+                }
+            });
+        });
+    hovered
+}
+
+/// Name and size, then the folder it is in, with a button to take it off the queue.
+fn queue_row(ui: &mut Ui, view: &View, id: NodeId, actions: &mut Vec<Action>) -> egui::Response {
+    let tree = view.tree;
+    let node = tree.node(id);
+    // Painted once the row's height is known.
+    let background = ui.painter().add(Shape::Noop);
+    let resp = ui
+        .scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
+            Frame::NONE.inner_margin(Margin::symmetric(6, 4)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
+                        let remove =
+                            Button::new(RichText::new("×").size(18.0).color(colors::TEXT_WEAK)).frame(false);
+                        if ui.add(remove).on_hover_text("Remove from the queue").clicked() {
+                            actions.push(Action::Unqueue(id));
+                        }
+                        ui.add(
+                            egui::Label::new(RichText::new(format::bytes(node.size)).size(14.0))
+                                .selectable(false),
+                        );
+                        ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
+                            let icon = if node.is_dir() { "🗀" } else { "🗋" };
+                            let name = RichText::new(format!("{icon}  {}", node.name_lossy())).size(14.0);
+                            ui.add(egui::Label::new(name).truncate().selectable(false));
+                        });
+                    });
+                });
+                let folder = tree.parent(id).map(|p| tree.path(p)).unwrap_or_default();
+                let folder = RichText::new(folder.to_string_lossy()).size(14.0).color(colors::TEXT_WEAK);
+                ui.add(egui::Label::new(folder).wrap().selectable(false));
+            });
+        })
+        .response;
+    let chart_hovered = view.chart_hover.map(Item::node) == Some(id);
+    if resp.contains_pointer() || chart_hovered {
+        ui.painter().set(background, Shape::rect_filled(resp.rect, CornerRadius::same(4), colors::PANEL));
+    }
+    resp
+}
+
+fn context_menu(ui: &mut Ui, view: &View, node: NodeId, actions: &mut Vec<Action>) {
+    let tree = view.tree;
     ui.set_min_width(180.0);
     ui.label(RichText::new(tree.display_name(node)).strong());
     ui.separator();
@@ -775,7 +951,13 @@ fn context_menu(ui: &mut Ui, tree: &Tree, node: NodeId, actions: &mut Vec<Action
     item(ui, "Copy path", Action::CopyPath(node));
     if node != Tree::ROOT {
         ui.separator();
-        item(ui, "Move to Trash…", Action::AskTrash(node));
+        if view.queue.contains(node) {
+            item(ui, "Remove from Trash queue", Action::Unqueue(node));
+        } else if view.queue.covers(tree, node) {
+            ui.add_enabled(false, Button::new("In Trash queue with its folder"));
+        } else {
+            item(ui, "Add to Trash queue", Action::Queue(node));
+        }
     }
 }
 
@@ -802,32 +984,4 @@ fn about_modal(ctx: &egui::Context) -> bool {
         });
     });
     close || modal.should_close()
-}
-
-/// `Some(true)` = confirmed, `Some(false)` = cancelled, `None` = still open.
-fn confirm_trash_modal(ctx: &egui::Context, tree: &Tree, node: NodeId) -> Option<bool> {
-    let mut result = None;
-    let modal = Modal::new(Id::new("confirm-trash")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        ui.label(RichText::new("Move to Trash?").size(18.0).strong());
-        ui.add_space(6.0);
-        ui.label(tree.path(node).to_string_lossy());
-        ui.label(RichText::new(format::bytes(tree.node(node).size)).color(colors::TEXT_WEAK));
-        ui.add_space(10.0);
-        ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
-            let trash = Button::new(RichText::new("Move to Trash").color(Color32::WHITE))
-                .fill(Color32::from_rgb(0xc0, 0x3a, 0x3a))
-                .min_size(Vec2::new(0.0, 26.0));
-            if ui.add(trash).clicked() {
-                result = Some(true);
-            }
-            if ui.button("Cancel").clicked() {
-                result = Some(false);
-            }
-        });
-    });
-    if modal.should_close() && result.is_none() {
-        result = Some(false);
-    }
-    result
 }

@@ -11,6 +11,7 @@ use eframe::egui::{
 
 use crate::colors;
 use crate::format;
+use crate::queue::TrashQueue;
 use crate::tree::{NodeId, Tree};
 
 /// Rings shown at most around the center.
@@ -23,7 +24,6 @@ const HOLE: f32 = 0.2;
 const RING_DECAY: f32 = 0.9;
 /// Arc tessellation step.
 const ARC_STEP: f32 = 1.5 * TAU / 360.0;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Node(NodeId),
@@ -264,9 +264,11 @@ pub enum Hit {
 }
 
 /// What the app wants emphasized on the chart.
-pub struct Highlight {
+pub struct Highlight<'a> {
     pub selected: Option<NodeId>,
     pub hovered: Option<Item>,
+    /// Grayed out: these go to the Trash with the queue.
+    pub queue: &'a TrashQueue,
 }
 
 pub struct ChartOutput {
@@ -345,6 +347,9 @@ pub fn show(
                 Some((_, e)) => (s.a0, s.a1, ring as f32, s.color, e),
                 None => (s.a0, s.a1, ring as f32, s.color, 1.0),
             };
+            if highlight.queue.covers(tree, s.item.node()) {
+                color = colors::queued(color);
+            }
             if let Some(sel) = highlight.selected {
                 if !tree.is_within(s.item.node(), sel) {
                     color = colors::dimmed(color);

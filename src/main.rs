@@ -5,6 +5,7 @@ mod colors;
 mod format;
 mod icon;
 mod platform;
+mod queue;
 mod scan;
 #[cfg(debug_assertions)]
 mod shot;

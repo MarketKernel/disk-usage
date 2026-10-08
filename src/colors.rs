@@ -9,6 +9,7 @@ pub const TEXT: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xec);
 pub const TEXT_WEAK: Color32 = Color32::from_rgb(0x9a, 0x9b, 0xa3);
 pub const ACCENT: Color32 = Color32::WHITE;
 pub const WARNING: Color32 = Color32::from_rgb(0xf0, 0xa0, 0x6a);
+pub const DANGER: Color32 = Color32::from_rgb(0xc0, 0x3a, 0x3a);
 
 /// Share of the current view that is pure red; anything bigger stays red.
 pub const SHARE_RED: f32 = 0.3;
@@ -58,6 +59,13 @@ fn hsv(h: f32, s: f32, v: f32) -> Color32 {
 
 pub fn hovered(c: Color32) -> Color32 {
     c.lerp_to_gamma(Color32::WHITE, 0.35)
+}
+
+/// Items queued for the Trash turn gray, a bit darker than they were, so the sectors
+/// stay distinguishable.
+pub fn queued(c: Color32) -> Color32 {
+    let luma = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+    Color32::from_gray((luma * 0.62).round() as u8)
 }
 
 pub fn dimmed(c: Color32) -> Color32 {

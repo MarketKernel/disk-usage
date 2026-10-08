@@ -1,6 +1,6 @@
 [package]
 name = "disk-usage"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Lightweight cross-platform disk usage visualizer with a sunburst chart"

@@ -2,6 +2,7 @@
 //! the window once the scan has finished, then exits. Optional:
 //! - `DISK_USAGE_SELECT=<n>` selects the n-th largest item,
 //! - `DISK_USAGE_ZOOM=<n>` zooms into the n-th largest item,
+//! - `DISK_USAGE_QUEUE="<n> <m> …"` adds these largest items to the Trash queue,
 //! - `DISK_USAGE_DELAY=<seconds>` waits before the screenshot (default 0.3),
 //! - `DISK_USAGE_DURING_SCAN=1` captures the progress screen instead,
 //! - `DISK_USAGE_HOVER="x,y x,y …"` moves the mouse through these points (0.15 s each).
@@ -18,6 +19,7 @@ pub struct Shot {
     path: PathBuf,
     pub select: Option<usize>,
     pub zoom: Option<usize>,
+    pub queue: Vec<usize>,
     pub during_scan: bool,
     hover: Vec<egui::Pos2>,
     delay: f64,
@@ -36,6 +38,11 @@ impl Shot {
             path,
             select: env("DISK_USAGE_SELECT"),
             zoom: env("DISK_USAGE_ZOOM"),
+            queue: std::env::var("DISK_USAGE_QUEUE")
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter_map(|n| n.parse().ok())
+                .collect(),
             during_scan: std::env::var_os("DISK_USAGE_DURING_SCAN").is_some(),
             hover: std::env::var("DISK_USAGE_HOVER")
                 .unwrap_or_default()
