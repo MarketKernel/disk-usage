@@ -1,5 +1,6 @@
 //! OS integration: file manager, default application, quick locations.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -48,8 +49,9 @@ pub fn reveal(path: &Path) {
     }
 }
 
-/// Opens `path` with its default application.
-pub fn open(path: &Path) {
+/// Opens `path` (or a URL) with its default application.
+pub fn open(path: impl AsRef<OsStr>) {
+    let path = path.as_ref();
     #[cfg(target_os = "macos")]
     spawn(Command::new("open").arg(path));
 

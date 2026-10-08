@@ -13,6 +13,9 @@ mod tree;
 
 use std::path::PathBuf;
 
+/// Window title; carries the version since Windows has no About menu to show it.
+pub const TITLE: &str = concat!("Disk Usage ", env!("CARGO_PKG_VERSION"));
+
 fn main() -> eframe::Result {
     // Old macOS versions pass a `-psn_…` process serial number to apps started from Finder.
     let path = std::env::args_os()
@@ -22,7 +25,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Disk Usage")
+            .with_title(TITLE)
             .with_app_id("disk-usage")
             .with_inner_size([1280.0, 840.0])
             .with_min_inner_size([720.0, 480.0])

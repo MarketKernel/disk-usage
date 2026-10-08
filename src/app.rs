@@ -42,6 +42,7 @@ pub struct App {
     last_row_click: Option<(NodeId, f64)>,
     /// Node waiting for confirmation before moving to the trash.
     confirm_trash: Option<NodeId>,
+    about: bool,
     message: Option<String>,
     quick: Vec<PathBuf>,
     #[cfg(debug_assertions)]
@@ -61,6 +62,7 @@ enum Action {
     CopyPath(NodeId),
     AskTrash(NodeId),
     Trash(NodeId),
+    About,
 }
 
 impl App {
@@ -83,6 +85,7 @@ impl App {
             scan_seen: (0, 0.0),
             last_row_click: None,
             confirm_trash: None,
+            about: false,
             message: None,
             quick,
             #[cfg(debug_assertions)]
@@ -112,7 +115,8 @@ impl App {
         match done.outcome {
             Outcome::Done(tree) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                    "Disk Usage — {}",
+                    "{} — {}",
+                    crate::TITLE,
                     tree.root_path().display()
                 )));
                 self.disk = platform::disk_space(tree.root_path());
@@ -183,6 +187,7 @@ impl App {
             }
             Action::AskTrash(node) => self.confirm_trash = Some(node),
             Action::Trash(node) => self.trash(node),
+            Action::About => self.about = true,
         }
     }
 
@@ -218,7 +223,7 @@ impl App {
         if let Some(path) = dropped {
             actions.push(Action::Scan(path));
         }
-        if ctx.egui_wants_keyboard_input() || self.confirm_trash.is_some() {
+        if ctx.egui_wants_keyboard_input() || self.confirm_trash.is_some() || self.about {
             return;
         }
         ctx.input_mut(|i| {
@@ -308,6 +313,9 @@ impl eframe::App for App {
                 None => {}
             }
         }
+        if self.about && about_modal(&ctx) {
+            self.about = false;
+        }
 
         #[cfg(debug_assertions)]
         if let Some(shot) = &mut self.shot
@@ -359,31 +367,30 @@ fn toolbar(ui: &mut Ui, app: &App, actions: &mut Vec<Action>) {
     egui::Panel::top("toolbar")
         .frame(Frame::NONE.fill(colors::PANEL).inner_margin(Margin::symmetric(10, 8)))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("🗁 Open…").on_hover_text("Choose a folder to scan (Ctrl/⌘+O)").clicked() {
-                    actions.push(Action::PickFolder);
+            ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
+                if ui.button("ℹ").on_hover_text("About").clicked() {
+                    actions.push(Action::About);
                 }
-                let can_rescan = app.tree.is_some() && app.scan.is_none();
-                if ui
-                    .add_enabled(can_rescan, Button::new("⟳ Rescan"))
-                    .on_hover_text("Scan again (F5)")
-                    .clicked()
-                {
-                    actions.push(Action::Rescan);
-                }
-                let Some(tree) = app.tree.as_ref().filter(|_| app.scan.is_none()) else { return };
-                let can_up = app.view != Tree::ROOT;
-                if ui
-                    .add_enabled(can_up, Button::new("⬆"))
-                    .on_hover_text("Up one level (Backspace)")
-                    .clicked()
-                {
-                    actions.push(Action::Up);
-                }
-                ui.separator();
-                breadcrumbs(ui, tree, app.view, actions);
+                ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| toolbar_left(ui, app, actions));
             });
         });
+}
+
+fn toolbar_left(ui: &mut Ui, app: &App, actions: &mut Vec<Action>) {
+    if ui.button("🗁 Open…").on_hover_text("Choose a folder to scan (Ctrl/⌘+O)").clicked() {
+        actions.push(Action::PickFolder);
+    }
+    let can_rescan = app.tree.is_some() && app.scan.is_none();
+    if ui.add_enabled(can_rescan, Button::new("⟳ Rescan")).on_hover_text("Scan again (F5)").clicked() {
+        actions.push(Action::Rescan);
+    }
+    let Some(tree) = app.tree.as_ref().filter(|_| app.scan.is_none()) else { return };
+    let can_up = app.view != Tree::ROOT;
+    if ui.add_enabled(can_up, Button::new("⬆")).on_hover_text("Up one level (Backspace)").clicked() {
+        actions.push(Action::Up);
+    }
+    ui.separator();
+    breadcrumbs(ui, tree, app.view, actions);
 }
 
 fn breadcrumbs(ui: &mut Ui, tree: &Tree, view: NodeId, actions: &mut Vec<Action>) {
@@ -770,6 +777,31 @@ fn context_menu(ui: &mut Ui, tree: &Tree, node: NodeId, actions: &mut Vec<Action
         ui.separator();
         item(ui, "Move to Trash…", Action::AskTrash(node));
     }
+}
+
+/// Returns true once the dialog should close.
+fn about_modal(ctx: &egui::Context) -> bool {
+    let mut close = false;
+    let modal = Modal::new(Id::new("about")).show(ctx, |ui| {
+        ui.set_max_width(360.0);
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new("Disk Usage").size(22.0).strong());
+            ui.label(
+                RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(colors::TEXT_WEAK),
+            );
+            ui.add_space(8.0);
+            ui.label(env!("CARGO_PKG_DESCRIPTION"));
+            ui.add_space(8.0);
+            let repo = env!("CARGO_PKG_REPOSITORY");
+            // egui's own link opener is compiled out (eframe's default features are off).
+            if ui.link(repo).on_hover_text("Open in the browser").clicked() {
+                platform::open(repo);
+            }
+            ui.add_space(10.0);
+            close = ui.button("Close").clicked();
+        });
+    });
+    close || modal.should_close()
 }
 
 /// `Some(true)` = confirmed, `Some(false)` = cancelled, `None` = still open.

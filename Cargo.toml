@@ -1,10 +1,11 @@
 [package]
 name = "disk-usage"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.92"
 description = "Lightweight cross-platform disk usage visualizer with a sunburst chart"
 license = "MIT"
+repository = "https://github.com/MarketKernel/disk-usage"
 
 [dependencies]
 eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
